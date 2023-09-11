@@ -1,10 +1,10 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 
-const char* ssid = "olimpo24";
-const char* password = "R3n3w4.l";
-const char* botToken = "6200999470:AAE0L00qY_BviL5gqYHsKlDvV1L9eOdaQaU";
-const char* chatId = "***REMOVED***";
+const char* ssid = "";
+const char* password = "";
+const char* botToken = "";
+const char* chatId = "";
 
 void setup() {
   Serial.begin(9600);
