@@ -19,6 +19,11 @@
     Twitter: https://twitter.com/witnessmenow
  *******************************************************************/
 
+ /*
+ Cuadno le envias un mensaje por telegram te responde un eco
+ este era solo  para probar la funcionalidad
+ */
+
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <UniversalTelegramBot.h>
