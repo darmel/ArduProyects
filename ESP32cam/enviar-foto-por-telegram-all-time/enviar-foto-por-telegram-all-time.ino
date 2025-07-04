@@ -20,8 +20,8 @@
 
 unsigned long prev;
 
-const char* ssid = "***REMOVED***";
-const char* password = "***REMOVED***";
+const char* ssid = "Latascordoba";
+const char* password = "Pierina123";
 
 //const char* ssid = "LOPEZ";
 //const char* password = "ot8233455";
@@ -32,7 +32,7 @@ String BOTtoken = "6200999470:AAE0L00qY_BviL5gqYHsKlDvV1L9eOdaQaU";  // your Bot
 // Use @myidbot to find out the chat ID of an individual or a group
 // Also note that you need to click "start" on a bot before it can
 // message you
-//String CHAT_ID = "***REMOVED***";
+//String CHAT_ID = "940059130";
 String CHAT_ID = "-4065052983";
 bool sendPhoto = false;
 bool flag = false;

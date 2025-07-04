@@ -2,7 +2,7 @@
 #define CONFIG_H
 
 // 🟢 Configuración WiFi
-const char* ssid = "***REMOVED***";
-const char* password = "***REMOVED***";
+const char* ssid = "Latascordoba";
+const char* password = "Pierina123";
 
 #endif

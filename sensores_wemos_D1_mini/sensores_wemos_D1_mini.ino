@@ -2,7 +2,7 @@
 #include <Wire.h>
 #include <Adafruit_BMP085.h>
 #include "DHT.h"
-#include "config.h"
+#include "config_secrets.h"
 #include <Ticker.h>
 //para el bot de telegram
 #include <WiFiClientSecure.h>
@@ -47,8 +47,8 @@ unsigned long buzzer_until = 0;
 
 // --- Variables para Telegram ---
 WiFiClientSecure clientTCP;
-String BOTtoken = "***REMOVED***";
-String CHAT_ID = "***REMOVED***";
+//String BOTtoken = "6200999470:AAGZ4hKMvU5klzdX7iSkRCe_w6D-wVkc9Yg";
+//String CHAT_ID = "940059130";
 UniversalTelegramBot bot(BOTtoken, clientTCP);
 
 // Cola de mensajes
@@ -65,7 +65,7 @@ Ticker watchdog;
 bool loggin = true;
 
 // Modo sentinela
-bool modoSentinela = false;
+bool modoSentinela = true;
 
 // Control de actualización del bot de telegam
 int botRequestDelay = 1000;
@@ -108,10 +108,16 @@ void setup() {
   configTime(-3 * 3600, 0, "pool.ntp.org");
 
   server.begin();
-  logInfo("fin setup");
 
   initTelegram();
 
+  bot.sendMessage(CHAT_ID, "Inicio Completo. estado Sentinela ACTIVO", "");
+  logInfo("Mensaje de INICIO enviado");
+
+  watchdog.attach(60, resetFunc);  // 100 segundos
+
+
+  logInfo("fin setup");
 
 }
 
@@ -121,7 +127,8 @@ void setup() {
 void loop() {
   heartBeat();
 
-  
+  resetWatchdog();
+
   WiFiClient client = server.available();
   if (client) {
     handleClient(client);
@@ -382,7 +389,6 @@ void heartBeat()
   if (millis() - lastLog > 300000)   // cada 5 min
   {
     logInfo("Servidor activo, esperando cliente...");
-    //Serial.println("Servidor activo, esperando cliente...");
     lastLog = millis();
   }
 }
@@ -493,27 +499,34 @@ void updateSensorsAndBuzzer() {
     if (pir_now && radar_now) {
       if (now - lastBothAlertTime > ALERT_INTERVAL) {
         enviarAlertaMovimiento("🥷 Alerta: PIR y radar detectaron movimiento");
+        logInfo("------------------🥷 Alerta: PIR y radar detectaron movimiento");
         lastBothAlertTime = now;
       }
     }
     else if (pir_now) {
       if (now - lastPIRAlertTime > ALERT_INTERVAL) {
         enviarAlertaMovimiento("👤 Alerta: PIR detectó movimiento");
+        logInfo("------------------👤 Alerta: PIR detectó movimiento");
         lastPIRAlertTime = now;
       }
     }
     else if (radar_now) {
       if (now - lastRadarAlertTime > ALERT_INTERVAL) {
         enviarAlertaMovimiento("🚶‍♂️ Alerta: Radar detectó movimiento");
+        logInfo("-----------------🚶‍♂️ Alerta: Radar detectó movimiento");
         lastRadarAlertTime = now;
       }
     }
   }
+
+  resetWatchdog();
+
 }
 
 
 
 void handleNewMessages(int numNewMessages) {
+  resetWatchdog();
   for (int i = 0; i < numNewMessages; i++) {
     String chat_id = String(bot.messages[i].chat_id);
     if (chat_id != CHAT_ID){
@@ -533,10 +546,33 @@ void handleNewMessages(int numNewMessages) {
     else if (text == "/sentinela") {
       modoSentinela = true;
       bot.sendMessage(CHAT_ID, "Modo sentinela activado 🟢", "");
+      logInfo("---------------Modo sentinela activado 🟢");
     }
     else if (text == "/descanso") {
       modoSentinela = false;
       bot.sendMessage(CHAT_ID, "Modo descanso activado 💤", "");
+      logInfo("---------------Modo sentinela DESACTIVADO");
+    }
+    else if (text == "/datos"){
+      updateData();
+      String datos = "📅 Fecha/Hora: " + getFormattedTime() + "\n";
+      datos += "🌡 DHT11 - Temp: " + String(dht11_temp, 1) + " °C, Hum: " + String(dht11_hum, 1) + " %\n";
+      datos += "🌡 BMP180 - Temp: " + String(bmp_temp, 1) + " °C, Presión: " + String(bmp_pressure, 1) + " hPa";
+      bot.sendMessage(CHAT_ID, datos, "");
+      logInfo("--------------Enviado /datos: " + datos);
+    }
+    else if (text == "/json") {
+      updateData();
+      String json = "{";
+      json += "\"hora\":\"" + getFormattedTime() + "\",";
+      json += "\"dht11_temp\":" + String(dht11_temp, 1) + ",";
+      json += "\"dht11_hum\":" + String(dht11_hum, 1) + ",";
+      json += "\"bmp_temp\":" + String(bmp_temp, 1) + ",";
+      json += "\"bmp_presion\":" + String(bmp_pressure, 1);
+      json += "}";
+
+      bot.sendMessage(CHAT_ID, json, "");
+      logInfo("--------------Enviado JSON por Telegram: " + json);
     }
   }
 }
@@ -557,6 +593,7 @@ void updateTelegramBot() {
 void enviarAlertaMovimiento(String mensaje) {
   if (modoSentinela) {
     bot.sendMessage(CHAT_ID, mensaje, "");
+    logInfo("----------mensaje enviado" + mensaje);
   }
 }
 
@@ -588,3 +625,8 @@ String desencolarMensaje() {
   return "";
 }
 
+
+void resetWatchdog() {
+  watchdog.detach();
+  watchdog.attach(60, resetFunc);
+}
