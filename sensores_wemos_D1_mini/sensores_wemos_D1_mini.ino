@@ -4,6 +4,9 @@
 #include "DHT.h"
 #include "config.h"
 #include <Ticker.h>
+//para el bot de telegram
+#include <WiFiClientSecure.h>
+#include <UniversalTelegramBot.h>
 
 // ---------------------------
 // Variables globales
@@ -42,11 +45,38 @@ unsigned int radar_trigger_count = 0;
 unsigned long buzzer_end_time = 0;
 unsigned long buzzer_until = 0;
 
+// --- Variables para Telegram ---
+WiFiClientSecure clientTCP;
+String BOTtoken = "***REMOVED***";
+String CHAT_ID = "***REMOVED***";
+UniversalTelegramBot bot(BOTtoken, clientTCP);
+
+// Cola de mensajes
+const int MAX_COLA = 5;
+String colaMensajes[MAX_COLA];
+int colaInicio = 0;
+int colaFin = 0;
+bool envioEnCurso = false;
+
 
 //watchdog
 Ticker watchdog;
 
 bool loggin = true;
+
+// Modo sentinela
+bool modoSentinela = false;
+
+// Control de actualización del bot de telegam
+int botRequestDelay = 1000;
+unsigned long lastTimeBotRan = 0;
+
+// Para controlar el envío de alertas
+unsigned long lastPIRAlertTime = 0;
+unsigned long lastRadarAlertTime = 0;
+unsigned long lastBothAlertTime = 0;
+const unsigned long ALERT_INTERVAL = 60000;  // 1 minuto
+
 
 //Funcion para loggin
 void logInfo(String logInfo){
@@ -80,6 +110,8 @@ void setup() {
   server.begin();
   logInfo("fin setup");
 
+  initTelegram();
+
 
 }
 
@@ -96,6 +128,8 @@ void loop() {
   }
 
   updateSensorsAndBuzzer();
+
+  updateTelegramBot();
 
 }
 
@@ -120,6 +154,11 @@ void connectWiFi() {
   //watchdog
   //watchdog.attach(60, resetFunc);  // 60 segundos sin desactivarse = reinicio
 
+}
+
+  void initTelegram() {
+  clientTCP.setInsecure(); // Si no querés el certificado (más simple para el Wemos)
+  // clientTCP.setCACert(TELEGRAM_CERTIFICATE_ROOT); // Si querés validar certificado
 }
 
 void initSensors() {
@@ -428,17 +467,14 @@ void updateData(){
 void updateSensorsAndBuzzer() {
   bool pir_now = digitalRead(PIR_PIN);
   bool radar_now = digitalRead(RADAR_PIN);
-  //logInfo("pir: " + String(pir_now));
-  //logInfo("radar: " + String(radar_now));
   pir_state = pir_now;
   radar_state = radar_now;
 
-
   unsigned long now = millis();
 
+  // --- Manejo del buzzer ---
   if (pir_now && radar_now) {
     buzzer_until = now + 30000;  // 30 segundos si ambos
-
   } 
   else if (pir_now || radar_now) {
     if (buzzer_until < now) {
@@ -451,4 +487,104 @@ void updateSensorsAndBuzzer() {
   } else {
     digitalWrite(BUZZER_PIN, LOW);
   }
+
+  // --- Manejo de alertas por Telegram ---
+  if (modoSentinela) {
+    if (pir_now && radar_now) {
+      if (now - lastBothAlertTime > ALERT_INTERVAL) {
+        enviarAlertaMovimiento("🥷 Alerta: PIR y radar detectaron movimiento");
+        lastBothAlertTime = now;
+      }
+    }
+    else if (pir_now) {
+      if (now - lastPIRAlertTime > ALERT_INTERVAL) {
+        enviarAlertaMovimiento("👤 Alerta: PIR detectó movimiento");
+        lastPIRAlertTime = now;
+      }
+    }
+    else if (radar_now) {
+      if (now - lastRadarAlertTime > ALERT_INTERVAL) {
+        enviarAlertaMovimiento("🚶‍♂️ Alerta: Radar detectó movimiento");
+        lastRadarAlertTime = now;
+      }
+    }
+  }
 }
+
+
+
+void handleNewMessages(int numNewMessages) {
+  for (int i = 0; i < numNewMessages; i++) {
+    String chat_id = String(bot.messages[i].chat_id);
+    if (chat_id != CHAT_ID){
+      bot.sendMessage(chat_id, "Usuario no autorizado", "");
+      continue;
+    }
+
+    String text = bot.messages[i].text;
+    String from_name = bot.messages[i].from_name;
+
+    if (text == "/start") {
+      String welcome = "Hola " + from_name + ", comandos disponibles:\n";
+      welcome += "/sentinela - activar modo sentinela\n";
+      welcome += "/descanso - desactivar modo sentinela\n";
+      bot.sendMessage(CHAT_ID, welcome, "");
+    }
+    else if (text == "/sentinela") {
+      modoSentinela = true;
+      bot.sendMessage(CHAT_ID, "Modo sentinela activado 🟢", "");
+    }
+    else if (text == "/descanso") {
+      modoSentinela = false;
+      bot.sendMessage(CHAT_ID, "Modo descanso activado 💤", "");
+    }
+  }
+}
+
+
+void updateTelegramBot() {
+  if (millis() > lastTimeBotRan + botRequestDelay) {
+    int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    while (numNewMessages) {
+      handleNewMessages(numNewMessages);
+      numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    }
+    lastTimeBotRan = millis();
+  }
+}
+
+
+void enviarAlertaMovimiento(String mensaje) {
+  if (modoSentinela) {
+    bot.sendMessage(CHAT_ID, mensaje, "");
+  }
+}
+
+
+bool colaEstaVacia() {
+  return colaInicio == colaFin;
+}
+
+bool colaEstaLlena() {
+  return ((colaFin + 1) % MAX_COLA) == colaInicio;
+}
+
+void encolarMensaje(String msg) {
+  if (!colaEstaLlena()) {
+    colaMensajes[colaFin] = msg;
+    colaFin = (colaFin + 1) % MAX_COLA;
+    logInfo("Mensaje encolado: " + msg);
+  } else {
+    logInfo("⚠️ Cola de mensajes llena. Se descarta: " + msg);
+  }
+}
+
+String desencolarMensaje() {
+  if (!colaEstaVacia()) {
+    String msg = colaMensajes[colaInicio];
+    colaInicio = (colaInicio + 1) % MAX_COLA;
+    return msg;
+  }
+  return "";
+}
+
