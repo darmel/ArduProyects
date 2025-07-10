@@ -127,6 +127,8 @@ void setup() {
 void loop() {
   heartBeat();
 
+  checkWiFiAndReconnect();
+
   resetWatchdog();
 
   WiFiClient client = server.available();
@@ -557,7 +559,8 @@ void handleNewMessages(int numNewMessages) {
       updateData();
       String datos = "📅 Fecha/Hora: " + getFormattedTime() + "\n";
       datos += "🌡 DHT11 - Temp: " + String(dht11_temp, 1) + " °C, Hum: " + String(dht11_hum, 1) + " %\n";
-      datos += "🌡 BMP180 - Temp: " + String(bmp_temp, 1) + " °C, Presión: " + String(bmp_pressure, 1) + " hPa";
+      datos += "🌡 BMP180 - Temp: " + String(bmp_temp, 1) + " °C, Presión: " + String(bmp_pressure, 1) + " hPa" + " %\n";
+      datos += "💻 IP local: " + WiFi.localIP().toString() + "\n";
       bot.sendMessage(CHAT_ID, datos, "");
       logInfo("--------------Enviado /datos: " + datos);
     }
@@ -629,4 +632,28 @@ String desencolarMensaje() {
 void resetWatchdog() {
   watchdog.detach();
   watchdog.attach(60, resetFunc);
+}
+
+
+void checkWiFiAndReconnect() {
+  if (WiFi.status() != WL_CONNECTED) {
+    logInfo("⚠️ WiFi desconectado. Intentando reconectar...");
+    WiFi.disconnect();  // fuerza reinicio de la conexión
+    WiFi.begin(ssid, password);
+
+    unsigned long startAttemptTime = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
+      delay(500);
+      Serial.print(".");
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      logInfo("\n✅ WiFi reconectado");
+      Serial.print("Nueva IP: ");
+      Serial.println(WiFi.localIP());
+      bot.sendMessage(CHAT_ID, "Conexión reestabelcida", "");
+    } else {
+      logInfo("\n❌ No se pudo reconectar a WiFi");
+    }
+  }
 }
