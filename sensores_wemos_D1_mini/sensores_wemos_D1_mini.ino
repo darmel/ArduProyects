@@ -2,11 +2,16 @@
 #include <Wire.h>
 #include <Adafruit_BMP085.h>
 #include "DHT.h"
-#include "config_secrets.h"
+//#include "config_secrets.h" 
+
 #include <Ticker.h>
 //para el bot de telegram
 #include <WiFiClientSecure.h>
 #include <UniversalTelegramBot.h>
+//para el wifi manager
+#include <LittleFS.h>
+#include "config_wifi.h"
+
 
 // ---------------------------
 // Variables globales
@@ -47,10 +52,14 @@ unsigned long buzzer_until = 0;
 
 // --- Variables para Telegram ---
 WiFiClientSecure clientTCP;
-//String BOTtoken = "6200999470:AAGZ4hKMvU5klzdX7iSkRCe_w6D-wVkc9Yg";
-//String CHAT_ID = "940059130";
-UniversalTelegramBot bot(BOTtoken, clientTCP);
+//String BOTtoken = "iSkRCe_w6D-wVkc9Yg";
+//String CHAT_ID = "930";
+String BOTtoken = "";
+String CHAT_ID = "";
 
+//UniversalTelegramBot bot(BOTtoken, clientTCP);
+//UniversalTelegramBot bot("", clientTCP);
+UniversalTelegramBot* bot = nullptr;
 // Cola de mensajes
 const int MAX_COLA = 5;
 String colaMensajes[MAX_COLA];
@@ -100,21 +109,48 @@ void setup() {
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW); // buzzer apagado al inicio
 
+  Serial.println("desde el setUp, inicia iniciarWiFiYConfig");
+  //connectWiFi();
+  if (!iniciarWiFiYConfig()) {
+    Serial.println("No se pudo configurar WiFi. Reiniciando...");
+    ESP.restart();
+  }
+  Serial.println("desde el setUp, termino iniciarWiFiYConfig");
+  Serial.println(BOTtoken);
+  Serial.println(CHAT_ID);
 
-  connectWiFi();
+  initTelegram();
+  Serial.println("desde el setUp, termino init telegram");
+  
+  bot = new UniversalTelegramBot(BOTtoken, clientTCP);
+  Serial.println("desde el setUp, termino set universal telegram bot");
+Serial.print("Conectado a: ");
+Serial.println(WiFi.SSID());
+
+
   initSensors();
 
   // Configura NTP (UTC -3 )
   configTime(-3 * 3600, 0, "pool.ntp.org");
 
   server.begin();
+  //bot = new UniversalTelegramBot(BOTtoken, clientTCP);
 
-  initTelegram();
 
-  bot.sendMessage(CHAT_ID, "Inicio Completo. estado Sentinela ACTIVO", "");
+
+  //bot.sendMessage(CHAT_ID, "Inicio Completo. estado Sentinela ACTIVO", "");
+    delay(1000);
+    Serial.print("Esperando conexión WiFi estable...");
+while (WiFi.status() != WL_CONNECTED) {
+  delay(500);
+  Serial.print(".");
+}
+Serial.println("✅ WiFi conectado");
+
+  bot->sendMessage(CHAT_ID, "Inicio Completo. estado Sentinela ACTIVO", "");
   logInfo("Mensaje de INICIO enviado");
 
-  watchdog.attach(60, resetFunc);  // 100 segundos
+  //watchdog.attach(60, resetFunc);  // 100 segundos
 
 
   logInfo("fin setup");
@@ -146,8 +182,9 @@ void loop() {
 // FUNCIONES DE SETUP
 // ---------------------------
 void connectWiFi() {
-  Serial.printf("Conectando a %s\n", ssid);
-  WiFi.begin(ssid, password);
+  //Serial.printf("Conectando a %s\n", ssid);
+  Serial.printf("Conectando a wifi \n");
+//  WiFi.begin(ssid, password);
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -530,29 +567,33 @@ void updateSensorsAndBuzzer() {
 void handleNewMessages(int numNewMessages) {
   resetWatchdog();
   for (int i = 0; i < numNewMessages; i++) {
-    String chat_id = String(bot.messages[i].chat_id);
+    String chat_id = String(bot->messages[i].chat_id);
     if (chat_id != CHAT_ID){
-      bot.sendMessage(chat_id, "Usuario no autorizado", "");
+      //bot.sendMessage(chat_id, "Usuario no autorizado", "");
+      bot->sendMessage(chat_id, "Usuario no autorizado", "");
       continue;
     }
 
-    String text = bot.messages[i].text;
-    String from_name = bot.messages[i].from_name;
+    String text = bot->messages[i].text;
+    String from_name = bot->messages[i].from_name;
 
     if (text == "/start") {
       String welcome = "Hola " + from_name + ", comandos disponibles:\n";
       welcome += "/sentinela - activar modo sentinela\n";
       welcome += "/descanso - desactivar modo sentinela\n";
-      bot.sendMessage(CHAT_ID, welcome, "");
+      //bot.sendMessage(CHAT_ID, welcome, "");
+      bot->sendMessage(CHAT_ID, welcome, "");
     }
     else if (text == "/sentinela") {
       modoSentinela = true;
-      bot.sendMessage(CHAT_ID, "Modo sentinela activado 🟢", "");
+      //bot.sendMessage(CHAT_ID, "Modo sentinela activado 🟢", "");
+      bot->sendMessage(CHAT_ID, "Modo sentinela activado 🟢", "");
       logInfo("---------------Modo sentinela activado 🟢");
     }
     else if (text == "/descanso") {
       modoSentinela = false;
-      bot.sendMessage(CHAT_ID, "Modo descanso activado 💤", "");
+      //bot.sendMessage(CHAT_ID, "Modo descanso activado 💤", "");
+      bot->sendMessage(CHAT_ID, "Modo descanso activado 💤", "");
       logInfo("---------------Modo sentinela DESACTIVADO");
     }
     else if (text == "/datos"){
@@ -561,7 +602,7 @@ void handleNewMessages(int numNewMessages) {
       datos += "🌡 DHT11 - Temp: " + String(dht11_temp, 1) + " °C, Hum: " + String(dht11_hum, 1) + " %\n";
       datos += "🌡 BMP180 - Temp: " + String(bmp_temp, 1) + " °C, Presión: " + String(bmp_pressure, 1) + " hPa" + " %\n";
       datos += "💻 IP local: " + WiFi.localIP().toString() + "\n";
-      bot.sendMessage(CHAT_ID, datos, "");
+      bot->sendMessage(CHAT_ID, datos, "");
       logInfo("--------------Enviado /datos: " + datos);
     }
     else if (text == "/json") {
@@ -574,7 +615,7 @@ void handleNewMessages(int numNewMessages) {
       json += "\"bmp_presion\":" + String(bmp_pressure, 1);
       json += "}";
 
-      bot.sendMessage(CHAT_ID, json, "");
+      bot->sendMessage(CHAT_ID, json, "");
       logInfo("--------------Enviado JSON por Telegram: " + json);
     }
   }
@@ -583,10 +624,10 @@ void handleNewMessages(int numNewMessages) {
 
 void updateTelegramBot() {
   if (millis() > lastTimeBotRan + botRequestDelay) {
-    int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    int numNewMessages = bot->getUpdates(bot->last_message_received + 1);
     while (numNewMessages) {
       handleNewMessages(numNewMessages);
-      numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+      numNewMessages = bot->getUpdates(bot->last_message_received + 1);
     }
     lastTimeBotRan = millis();
   }
@@ -595,7 +636,7 @@ void updateTelegramBot() {
 
 void enviarAlertaMovimiento(String mensaje) {
   if (modoSentinela) {
-    bot.sendMessage(CHAT_ID, mensaje, "");
+    bot->sendMessage(CHAT_ID, mensaje, "");
     logInfo("----------mensaje enviado" + mensaje);
   }
 }
@@ -639,7 +680,8 @@ void checkWiFiAndReconnect() {
   if (WiFi.status() != WL_CONNECTED) {
     logInfo("⚠️ WiFi desconectado. Intentando reconectar...");
     WiFi.disconnect();  // fuerza reinicio de la conexión
-    WiFi.begin(ssid, password);
+    //WiFi.begin(ssid, password);
+    WiFi.reconnect();
 
     unsigned long startAttemptTime = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 10000) {
@@ -651,7 +693,7 @@ void checkWiFiAndReconnect() {
       logInfo("\n✅ WiFi reconectado");
       Serial.print("Nueva IP: ");
       Serial.println(WiFi.localIP());
-      bot.sendMessage(CHAT_ID, "Conexión reestabelcida", "");
+      bot->sendMessage(CHAT_ID, "Conexión reestabelcida", "");
     } else {
       logInfo("\n❌ No se pudo reconectar a WiFi");
     }
