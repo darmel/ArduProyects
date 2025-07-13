@@ -11,6 +11,13 @@
 //para el wifi manager
 #include <LittleFS.h>
 #include "config_wifi.h"
+//para los sensores de temperatura, humedad y presion
+#include "sensores.h"
+//para sensores de movimiento
+#include "movimiento.h"
+
+//para las fucniones utilitarias
+#include "utils.h"
 
 
 // ---------------------------
@@ -21,44 +28,20 @@ WiFiServer server(80);
 const int ledPin = LED_BUILTIN;
 bool ledState = HIGH;
 
-//BMP180
-Adafruit_BMP085 bmp;
-bool bmp_ok = false;
-float bmp_temp = NAN;
-float bmp_pressure = NAN;
-
-//DHT11
-#define DHT11_PIN D5  // GPIO14
-DHT dht11(DHT11_PIN, DHT11);
-bool dht11_ok = false;
-
-float dht11_temp = NAN;
-float dht11_hum = NAN;
-
 //PIR
-#define PIR_PIN D6        // GPIO12
-bool pir_state = false;
 unsigned int pir_trigger_count = 0;
 
 //Radar
-#define RADAR_PIN D7      // GPIO13
-bool radar_state = false;
 unsigned int radar_trigger_count = 0;
 
 //Buzzer
-#define BUZZER_PIN D0     // GPIO16
 unsigned long buzzer_end_time = 0;
-unsigned long buzzer_until = 0;
 
 // --- Variables para Telegram ---
 WiFiClientSecure clientTCP;
-//String BOTtoken = "iSkRCe_w6D-wVkc9Yg";
-//String CHAT_ID = "930";
 String BOTtoken = "";
 String CHAT_ID = "";
 
-//UniversalTelegramBot bot(BOTtoken, clientTCP);
-//UniversalTelegramBot bot("", clientTCP);
 UniversalTelegramBot* bot = nullptr;
 // Cola de mensajes
 const int MAX_COLA = 5;
@@ -67,32 +50,12 @@ int colaInicio = 0;
 int colaFin = 0;
 bool envioEnCurso = false;
 
-
 //watchdog
 Ticker watchdog;
 
-bool loggin = true;
-
-// Modo sentinela
-bool modoSentinela = true;
-
 // Control de actualización del bot de telegam
-int botRequestDelay = 1000;
+int botRequestDelay = 3000;
 unsigned long lastTimeBotRan = 0;
-
-// Para controlar el envío de alertas
-unsigned long lastPIRAlertTime = 0;
-unsigned long lastRadarAlertTime = 0;
-unsigned long lastBothAlertTime = 0;
-const unsigned long ALERT_INTERVAL = 60000;  // 1 minuto
-
-
-//Funcion para loggin
-void logInfo(String logInfo){
-  if (loggin == true){
-    Serial.println(logInfo);
-  }
-}
 
 // ---------------------------
 // SETUP
@@ -103,11 +66,6 @@ void setup() {
 
   pinMode(ledPin, OUTPUT);
   digitalWrite(ledPin, ledState);
-
-  pinMode(PIR_PIN, INPUT);
-  pinMode(RADAR_PIN, INPUT);
-  pinMode(BUZZER_PIN, OUTPUT);
-  digitalWrite(BUZZER_PIN, LOW); // buzzer apagado al inicio
 
   Serial.println("desde el setUp, inicia iniciarWiFiYConfig");
   //connectWiFi();
@@ -124,34 +82,27 @@ void setup() {
   
   bot = new UniversalTelegramBot(BOTtoken, clientTCP);
   Serial.println("desde el setUp, termino set universal telegram bot");
-Serial.print("Conectado a: ");
-Serial.println(WiFi.SSID());
+  Serial.print("Conectado a: ");
+  Serial.println(WiFi.SSID());
 
+  initSensors(); //sensores de temperatura
 
-  initSensors();
+  initMovimiento(); //sensores de movimiento
 
   // Configura NTP (UTC -3 )
   configTime(-3 * 3600, 0, "pool.ntp.org");
 
   server.begin();
-  //bot = new UniversalTelegramBot(BOTtoken, clientTCP);
-
-
-
-  //bot.sendMessage(CHAT_ID, "Inicio Completo. estado Sentinela ACTIVO", "");
     delay(1000);
     Serial.print("Esperando conexión WiFi estable...");
-while (WiFi.status() != WL_CONNECTED) {
-  delay(500);
-  Serial.print(".");
-}
-Serial.println("✅ WiFi conectado");
+  while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+    }
+  Serial.println("✅ WiFi conectado");
 
-  bot->sendMessage(CHAT_ID, "Inicio Completo. estado Sentinela ACTIVO", "");
+  bot->sendMessage(CHAT_ID, "Inicio Completo. estado Centinela ACTIVO", "");
   logInfo("Mensaje de INICIO enviado");
-
-  //watchdog.attach(60, resetFunc);  // 100 segundos
-
 
   logInfo("fin setup");
 
@@ -172,9 +123,18 @@ void loop() {
     handleClient(client);
   }
 
-  updateSensorsAndBuzzer();
+  logInfo("-----Update MOvimiento empieza desde el loop");
+  updateMovimiento();       // PIR y radar
+  logInfo("-----Termina Update MOvimiento");
+  
+  logInfo("---------empieza evaluar alerta desde el loop");
+  evaluarAlerta();          // Telegram y buzzer
+  logInfo("---------termina evaluar alerta desde el loop");
 
+  logInfo("----------------empieza update telegramBot desde el loop");
   updateTelegramBot();
+  logInfo("----------------termina update TelegramBot desde el loop");
+
 
 }
 
@@ -182,9 +142,7 @@ void loop() {
 // FUNCIONES DE SETUP
 // ---------------------------
 void connectWiFi() {
-  //Serial.printf("Conectando a %s\n", ssid);
   Serial.printf("Conectando a wifi \n");
-//  WiFi.begin(ssid, password);
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -192,137 +150,20 @@ void connectWiFi() {
   }
 
   logInfo("\nWiFi conectado");
-  //Serial.println("\nWiFi conectado");
   Serial.print("IP local: ");
   Serial.println(WiFi.localIP());
-  //logInfo(WiFi.localIP());
 
-  //watchdog
-  //watchdog.attach(60, resetFunc);  // 60 segundos sin desactivarse = reinicio
-
-}
+  } 
 
   void initTelegram() {
-  clientTCP.setInsecure(); // Si no querés el certificado (más simple para el Wemos)
+  clientTCP.setInsecure(); //certificado (más simple para el Wemos)
   // clientTCP.setCACert(TELEGRAM_CERTIFICATE_ROOT); // Si querés validar certificado
-}
-
-void initSensors() {
-  //BMP180
-  if (bmp.begin()) {
-    bmp_ok = true;
-  } else {
-    logInfo("⚠️ BMP180 no encontrado o fallando.");
-//    Serial.println("⚠️ BMP180 no encontrado o fallando.");
-    bmp_ok = false;
-  }
-
-//init DHT11
-  dht11.begin();
-
 }
 
 //funcion para el watchdog
 void resetFunc() {
   logInfo("⚠️ Watchdog activado: reiniciando...");
   ESP.restart();
-}
-
-
-// ---------------------------
-// FUNCIONES DE LECTURA
-// ---------------------------
-//////////
-//BMP180//
-//////////
-//update valores leidos
-void updateBMP180() {
-  if (!bmp_ok) {
-    return;  // El sensor no está disponible, no hacemos nada
-  }
-
-  logInfo("Leyendo BMP180...");
-  bmp_temp = bmp.readTemperature();
-  yield();
-  bmp_pressure = bmp.readPressure() / 100.0; // hPa
-  yield();
-
-  logInfo("BMP180 leído ok");
-}
-
-//solo formatea data del BMP180 para html
-String readBMP180() {
-  if (!bmp_ok) {
-    return "<h2>BMP180</h2><p style='color:red;'>Sensor no disponible</p>";
-  }
-
-  if (isnan(bmp_temp) || isnan(bmp_pressure)) {
-    return "<h2>BMP180</h2><p style='color:red;'>Error en la lectura</p>";
-  }
-
-  String data = "<h2>BMP180</h2>";
-  data += "<p>Temperatura: " + String(bmp_temp, 1) + " &deg;C</p>";
-  data += "<p>Presión: " + String(bmp_pressure, 1) + " hPa</p>";
-  return data;
-}
-
-//solo fortmatea data del BMP180 para el json
-String readBMP180Json() {
-  if (!bmp_ok) {
-    return "{\"error\":\"Sensor no disponible\"}";
-  }
-
-  if (isnan(bmp_temp) || isnan(bmp_pressure)) {
-    return "{\"error\":\"Lectura invalida\"}";
-  }
-
-  String json = "{";
-  json += "\"temperatura\":" + String(bmp_temp, 1) + ",";
-  json += "\"presion\":" + String(bmp_pressure, 1);
-  json += "}";
-
-  return json;
-}
-
-///////////
-// DHT11 //
-//////////
-//udapte valores leidos del DHT11
-void updateDHT11() {
-  logInfo("Leyendo DHT11...");
-  dht11_temp = dht11.readTemperature();
-  yield();
-  dht11_hum = dht11.readHumidity();
-  yield();
-
-  if (isnan(dht11_temp) || isnan(dht11_hum)) {
-    logInfo("DHT11 error de lectura");
-  } else {
-    logInfo("DHT11 leído ok");
-  }
-}
-
-//solo formatea data del DHT11 para html
-String readDHT11() {
-  if (isnan(dht11_temp) || isnan(dht11_hum)) {
-    return "<h2>DHT11</h2><p style='color:red;'>Error en la lectura</p>";
-  }
-  String data = "<h2>DHT11</h2>";
-  data += "<p>Temperatura: " + String(dht11_temp, 1) + " &deg;C</p>";
-  data += "<p>Humedad: " + String(dht11_hum, 1) + " %</p>";
-  return data;
-}
-
-//solo formatea data del DHT11 para el JSON
-String readDHT11Json() {
-  if (isnan(dht11_temp) || isnan(dht11_hum)) {
-    return "{\"error\":\"Lectura invalida\"}";
-  }
-  String json = "{";
-  json += "\"temperatura\":" + String(dht11_temp, 1) + ",";
-  json += "\"humedad\":" + String(dht11_hum, 1);
-  json += "}";
-  return json;
 }
 
 ///////////
@@ -339,14 +180,11 @@ String getFormattedTime() {
   return String(buffer);
 }
 
-
-
 // ---------------------------
 // FUNCIONES WEB
 // ---------------------------
 //maneja el enceder/apagar el led
 void handleRequest(String req) { 
-  //logInfo("Procesando request: " + req");
   Serial.println("Procesando request: " + req);
 
   if (req.indexOf("/ON") != -1) {
@@ -420,8 +258,6 @@ void sendWebPage(WiFiClient client) {
   logInfo("web enviada");
 }
 
-
-
 void heartBeat()
 {
   static unsigned long lastLog = 0;
@@ -432,7 +268,6 @@ void heartBeat()
   }
 }
 
-
 void sendJson(WiFiClient client) 
 {
   String json = "{";
@@ -440,9 +275,9 @@ void sendJson(WiFiClient client)
   json += "\"led\":\"" + String((ledState == LOW) ? "ENCENDIDO" : "APAGADO") + "\",";
   json += "\"bmp\":" + readBMP180Json() + ",";
   json += "\"dht\":" + readDHT11Json() + ",";
-  json += "\"pir\":\"" + String(pir_state ? "👤" : "❌") + "\",";
-  json += "\"radar\":\"" + String(radar_state ? "🚶‍♂️" : "❌") + "\",";
-  json += "\"alarma\":\"" + String((pir_state && radar_state) ? "🥷" : (digitalRead(BUZZER_PIN) ? "🔔" : "🔕")) + "\"";
+  json += "\"pir\":\"" + String(getPIR() ? "👤" : "❌") + "\",";
+  json += "\"radar\":\"" + String(getRadar() ? "🚶‍♂️" : "❌") + "\",";
+  json += "\"alarma\":\"" + String((getPIR() && getRadar()) ? "🥷" : (getBuzzer() ? "🔔" : "🔕")) + "\"";
   json += "}";
 
   client.println("HTTP/1.1 200 OK");
@@ -457,7 +292,6 @@ void sendJson(WiFiClient client)
   client.stop();
   logInfo("JSON enviado");
 }
-
 
 //Funcion para manejar las requests, si es de json solo o de todo el sitio
 void handleClient(WiFiClient client) {
@@ -503,73 +337,11 @@ void handleClient(WiFiClient client) {
 
 }
 
-void updateData(){
-  updateDHT11();
-  updateBMP180();
-}
-
-
-void updateSensorsAndBuzzer() {
-  bool pir_now = digitalRead(PIR_PIN);
-  bool radar_now = digitalRead(RADAR_PIN);
-  pir_state = pir_now;
-  radar_state = radar_now;
-
-  unsigned long now = millis();
-
-  // --- Manejo del buzzer ---
-  if (pir_now && radar_now) {
-    buzzer_until = now + 30000;  // 30 segundos si ambos
-  } 
-  else if (pir_now || radar_now) {
-    if (buzzer_until < now) {
-      buzzer_until = now + 10000;  // 10 segundos si uno solo
-    }
-  }
-
-  if (now < buzzer_until) {
-    digitalWrite(BUZZER_PIN, HIGH);
-  } else {
-    digitalWrite(BUZZER_PIN, LOW);
-  }
-
-  // --- Manejo de alertas por Telegram ---
-  if (modoSentinela) {
-    if (pir_now && radar_now) {
-      if (now - lastBothAlertTime > ALERT_INTERVAL) {
-        enviarAlertaMovimiento("🥷 Alerta: PIR y radar detectaron movimiento");
-        logInfo("------------------🥷 Alerta: PIR y radar detectaron movimiento");
-        lastBothAlertTime = now;
-      }
-    }
-    else if (pir_now) {
-      if (now - lastPIRAlertTime > ALERT_INTERVAL) {
-        enviarAlertaMovimiento("👤 Alerta: PIR detectó movimiento");
-        logInfo("------------------👤 Alerta: PIR detectó movimiento");
-        lastPIRAlertTime = now;
-      }
-    }
-    else if (radar_now) {
-      if (now - lastRadarAlertTime > ALERT_INTERVAL) {
-        enviarAlertaMovimiento("🚶‍♂️ Alerta: Radar detectó movimiento");
-        logInfo("-----------------🚶‍♂️ Alerta: Radar detectó movimiento");
-        lastRadarAlertTime = now;
-      }
-    }
-  }
-
-  resetWatchdog();
-
-}
-
-
-
 void handleNewMessages(int numNewMessages) {
   resetWatchdog();
   for (int i = 0; i < numNewMessages; i++) {
     String chat_id = String(bot->messages[i].chat_id);
     if (chat_id != CHAT_ID){
-      //bot.sendMessage(chat_id, "Usuario no autorizado", "");
       bot->sendMessage(chat_id, "Usuario no autorizado", "");
       continue;
     }
@@ -579,29 +351,28 @@ void handleNewMessages(int numNewMessages) {
 
     if (text == "/start") {
       String welcome = "Hola " + from_name + ", comandos disponibles:\n";
-      welcome += "/sentinela - activar modo sentinela\n";
-      welcome += "/descanso - desactivar modo sentinela\n";
-      //bot.sendMessage(CHAT_ID, welcome, "");
+      welcome += "/centinela - activar modo centinela\n";
+      welcome += "/descanso - desactivar modo centinela\n";
       bot->sendMessage(CHAT_ID, welcome, "");
     }
-    else if (text == "/sentinela") {
-      modoSentinela = true;
-      //bot.sendMessage(CHAT_ID, "Modo sentinela activado 🟢", "");
-      bot->sendMessage(CHAT_ID, "Modo sentinela activado 🟢", "");
-      logInfo("---------------Modo sentinela activado 🟢");
+    else if (text == "/centinela") {
+      //modoCentinela = true;
+      setModoCentinela(true);
+      bot->sendMessage(CHAT_ID, "Modo centinela activado 🟢", "");
+      logInfo("---------------Modo centinela activado 🟢");
     }
     else if (text == "/descanso") {
-      modoSentinela = false;
-      //bot.sendMessage(CHAT_ID, "Modo descanso activado 💤", "");
+      //modoCentinela = false;
+      setModoCentinela(false);
       bot->sendMessage(CHAT_ID, "Modo descanso activado 💤", "");
-      logInfo("---------------Modo sentinela DESACTIVADO");
+      logInfo("---------------Modo Centinela DESACTIVADO");
     }
     else if (text == "/datos"){
       updateData();
       String datos = "📅 Fecha/Hora: " + getFormattedTime() + "\n";
       datos += "🌡 DHT11 - Temp: " + String(dht11_temp, 1) + " °C, Hum: " + String(dht11_hum, 1) + " %\n";
       datos += "🌡 BMP180 - Temp: " + String(bmp_temp, 1) + " °C, Presión: " + String(bmp_pressure, 1) + " hPa" + " %\n";
-      datos += "💻 IP local: " + WiFi.localIP().toString() + "\n";
+      datos += "💻 IP local: http://" + WiFi.localIP().toString() + "\n";
       bot->sendMessage(CHAT_ID, datos, "");
       logInfo("--------------Enviado /datos: " + datos);
     }
@@ -621,26 +392,19 @@ void handleNewMessages(int numNewMessages) {
   }
 }
 
-
 void updateTelegramBot() {
   if (millis() > lastTimeBotRan + botRequestDelay) {
+    logInfo("ingresa en el IF de UpdateTelegramBot");
     int numNewMessages = bot->getUpdates(bot->last_message_received + 1);
     while (numNewMessages) {
+      logInfo("ingresa en el WHILE de UpdateTelegramBot");
       handleNewMessages(numNewMessages);
       numNewMessages = bot->getUpdates(bot->last_message_received + 1);
     }
     lastTimeBotRan = millis();
   }
+  logInfo("termina UpdateTelegramBot");
 }
-
-
-void enviarAlertaMovimiento(String mensaje) {
-  if (modoSentinela) {
-    bot->sendMessage(CHAT_ID, mensaje, "");
-    logInfo("----------mensaje enviado" + mensaje);
-  }
-}
-
 
 bool colaEstaVacia() {
   return colaInicio == colaFin;
@@ -669,18 +433,15 @@ String desencolarMensaje() {
   return "";
 }
 
-
 void resetWatchdog() {
   watchdog.detach();
   watchdog.attach(60, resetFunc);
 }
 
-
 void checkWiFiAndReconnect() {
   if (WiFi.status() != WL_CONNECTED) {
     logInfo("⚠️ WiFi desconectado. Intentando reconectar...");
     WiFi.disconnect();  // fuerza reinicio de la conexión
-    //WiFi.begin(ssid, password);
     WiFi.reconnect();
 
     unsigned long startAttemptTime = millis();
