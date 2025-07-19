@@ -6,4 +6,8 @@
 void logInfo(const String& mensaje);
 extern bool loggin;
 
+String getFormattedTime();
+
+
+
 #endif

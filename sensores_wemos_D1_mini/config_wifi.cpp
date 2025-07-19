@@ -3,8 +3,8 @@
 #include <LittleFS.h>
 #include <ArduinoJson.h>
 
-//String BOTtoken = "";
-//String CHAT_ID = "";
+String BOTtoken = "";
+String CHAT_ID = "";
 
 
 bool iniciarWiFiYConfig() {
@@ -13,7 +13,7 @@ bool iniciarWiFiYConfig() {
   Serial.println("Inicia iniciaWiFiYConfig");
   WiFiManager wm;
 
-  //wm.resetSettings();  // Borra credenciales WiFi anteriores
+// wm.resetSettings();  // Borra credenciales WiFi anteriores
 //ESP.restart();
 
   WiFiManagerParameter custom_token("bot_token", "Telegram Bot Token", "", 70);

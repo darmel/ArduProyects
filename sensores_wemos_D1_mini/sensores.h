@@ -19,4 +19,6 @@ extern float dht11_hum;
 extern bool bmp_ok;
 extern bool dht11_ok;
 
+
+
 #endif

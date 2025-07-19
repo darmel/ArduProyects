@@ -19,6 +19,8 @@
 //para las fucniones utilitarias
 #include "utils.h"
 
+//para el manejo del bot y todo lo que involucra
+#include "telegram_bot.h"
 
 // ---------------------------
 // Variables globales
@@ -37,25 +39,8 @@ unsigned int radar_trigger_count = 0;
 //Buzzer
 unsigned long buzzer_end_time = 0;
 
-// --- Variables para Telegram ---
-WiFiClientSecure clientTCP;
-String BOTtoken = "";
-String CHAT_ID = "";
-
-UniversalTelegramBot* bot = nullptr;
-// Cola de mensajes
-const int MAX_COLA = 5;
-String colaMensajes[MAX_COLA];
-int colaInicio = 0;
-int colaFin = 0;
-bool envioEnCurso = false;
-
 //watchdog
 Ticker watchdog;
-
-// Control de actualización del bot de telegam
-int botRequestDelay = 3000;
-unsigned long lastTimeBotRan = 0;
 
 // ---------------------------
 // SETUP
@@ -80,10 +65,8 @@ void setup() {
   initTelegram();
   Serial.println("desde el setUp, termino init telegram");
   
-  bot = new UniversalTelegramBot(BOTtoken, clientTCP);
-  Serial.println("desde el setUp, termino set universal telegram bot");
-  Serial.print("Conectado a: ");
-  Serial.println(WiFi.SSID());
+  //Serial.print("Conectado a: ");
+  //Serial.println(WiFi.SSID());
 
   initSensors(); //sensores de temperatura
 
@@ -101,8 +84,7 @@ void setup() {
     }
   Serial.println("✅ WiFi conectado");
 
-  bot->sendMessage(CHAT_ID, "Inicio Completo. estado Centinela ACTIVO", "");
-  logInfo("Mensaje de INICIO enviado");
+  startTelegramBot();
 
   logInfo("fin setup");
 
@@ -123,18 +105,14 @@ void loop() {
     handleClient(client);
   }
 
-  logInfo("-----Update MOvimiento empieza desde el loop");
+  //logInfo("-----Update MOvimiento empieza desde el loop");
   updateMovimiento();       // PIR y radar
-  logInfo("-----Termina Update MOvimiento");
   
-  logInfo("---------empieza evaluar alerta desde el loop");
+  //logInfo("---------empieza evaluar alerta desde el loop");
   evaluarAlerta();          // Telegram y buzzer
-  logInfo("---------termina evaluar alerta desde el loop");
 
-  logInfo("----------------empieza update telegramBot desde el loop");
+  //logInfo("----------------empieza update telegramBot desde el loop");
   updateTelegramBot();
-  logInfo("----------------termina update TelegramBot desde el loop");
-
 
 }
 
@@ -155,29 +133,10 @@ void connectWiFi() {
 
   } 
 
-  void initTelegram() {
-  clientTCP.setInsecure(); //certificado (más simple para el Wemos)
-  // clientTCP.setCACert(TELEGRAM_CERTIFICATE_ROOT); // Si querés validar certificado
-}
-
 //funcion para el watchdog
 void resetFunc() {
   logInfo("⚠️ Watchdog activado: reiniciando...");
   ESP.restart();
-}
-
-///////////
-// HORA ///
-///////////
-//formateo de la hora
-String getFormattedTime() {
-  time_t now = time(nullptr);
-  struct tm * timeinfo = localtime(&now);
-
-  char buffer[30];
-  strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", timeinfo);
-
-  return String(buffer);
 }
 
 // ---------------------------
@@ -335,102 +294,6 @@ void handleClient(WiFiClient client) {
   watchdog.detach();
   watchdog.attach(60, resetFunc);
 
-}
-
-void handleNewMessages(int numNewMessages) {
-  resetWatchdog();
-  for (int i = 0; i < numNewMessages; i++) {
-    String chat_id = String(bot->messages[i].chat_id);
-    if (chat_id != CHAT_ID){
-      bot->sendMessage(chat_id, "Usuario no autorizado", "");
-      continue;
-    }
-
-    String text = bot->messages[i].text;
-    String from_name = bot->messages[i].from_name;
-
-    if (text == "/start") {
-      String welcome = "Hola " + from_name + ", comandos disponibles:\n";
-      welcome += "/centinela - activar modo centinela\n";
-      welcome += "/descanso - desactivar modo centinela\n";
-      bot->sendMessage(CHAT_ID, welcome, "");
-    }
-    else if (text == "/centinela") {
-      //modoCentinela = true;
-      setModoCentinela(true);
-      bot->sendMessage(CHAT_ID, "Modo centinela activado 🟢", "");
-      logInfo("---------------Modo centinela activado 🟢");
-    }
-    else if (text == "/descanso") {
-      //modoCentinela = false;
-      setModoCentinela(false);
-      bot->sendMessage(CHAT_ID, "Modo descanso activado 💤", "");
-      logInfo("---------------Modo Centinela DESACTIVADO");
-    }
-    else if (text == "/datos"){
-      updateData();
-      String datos = "📅 Fecha/Hora: " + getFormattedTime() + "\n";
-      datos += "🌡 DHT11 - Temp: " + String(dht11_temp, 1) + " °C, Hum: " + String(dht11_hum, 1) + " %\n";
-      datos += "🌡 BMP180 - Temp: " + String(bmp_temp, 1) + " °C, Presión: " + String(bmp_pressure, 1) + " hPa" + " %\n";
-      datos += "💻 IP local: http://" + WiFi.localIP().toString() + "\n";
-      bot->sendMessage(CHAT_ID, datos, "");
-      logInfo("--------------Enviado /datos: " + datos);
-    }
-    else if (text == "/json") {
-      updateData();
-      String json = "{";
-      json += "\"hora\":\"" + getFormattedTime() + "\",";
-      json += "\"dht11_temp\":" + String(dht11_temp, 1) + ",";
-      json += "\"dht11_hum\":" + String(dht11_hum, 1) + ",";
-      json += "\"bmp_temp\":" + String(bmp_temp, 1) + ",";
-      json += "\"bmp_presion\":" + String(bmp_pressure, 1);
-      json += "}";
-
-      bot->sendMessage(CHAT_ID, json, "");
-      logInfo("--------------Enviado JSON por Telegram: " + json);
-    }
-  }
-}
-
-void updateTelegramBot() {
-  if (millis() > lastTimeBotRan + botRequestDelay) {
-    logInfo("ingresa en el IF de UpdateTelegramBot");
-    int numNewMessages = bot->getUpdates(bot->last_message_received + 1);
-    while (numNewMessages) {
-      logInfo("ingresa en el WHILE de UpdateTelegramBot");
-      handleNewMessages(numNewMessages);
-      numNewMessages = bot->getUpdates(bot->last_message_received + 1);
-    }
-    lastTimeBotRan = millis();
-  }
-  logInfo("termina UpdateTelegramBot");
-}
-
-bool colaEstaVacia() {
-  return colaInicio == colaFin;
-}
-
-bool colaEstaLlena() {
-  return ((colaFin + 1) % MAX_COLA) == colaInicio;
-}
-
-void encolarMensaje(String msg) {
-  if (!colaEstaLlena()) {
-    colaMensajes[colaFin] = msg;
-    colaFin = (colaFin + 1) % MAX_COLA;
-    logInfo("Mensaje encolado: " + msg);
-  } else {
-    logInfo("⚠️ Cola de mensajes llena. Se descarta: " + msg);
-  }
-}
-
-String desencolarMensaje() {
-  if (!colaEstaVacia()) {
-    String msg = colaMensajes[colaInicio];
-    colaInicio = (colaInicio + 1) % MAX_COLA;
-    return msg;
-  }
-  return "";
 }
 
 void resetWatchdog() {
